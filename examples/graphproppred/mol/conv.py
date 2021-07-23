@@ -3,9 +3,29 @@ from torch_geometric.nn import MessagePassing
 import torch.nn.functional as F
 from torch_geometric.nn import global_mean_pool, global_add_pool
 from ogb.graphproppred.mol_encoder import AtomEncoder,BondEncoder
-from torch_geometric.utils import degree
-
+from torch_geometric.utils import degree, to_dense_adj, dense_to_sparse, get_laplacian
 import math
+
+class SGCConv(MessagePassing):
+    """sh implemented Graph Project 2021"""
+    def __init__(self, emb_dim, normalization):
+        super(SGCConv, self).__init__()
+        self.emb_dim = emb_dim
+        self.normalization = normalization
+        self.W = torch.nn.Linear(emb_dim, emb_dim)
+        self.batch_norm = torch.nn.BatchNorm1d(emb_dim)
+
+        self.bond_encoder = BondEncoder(emb_dim = emb_dim)
+
+    def forward(self, x, edge_index, edge_attr):
+        edge_embedding = self.bond_encoder(edge_attr)
+        if self.normalization is not None:
+            edge_index, edge_weight = get_laplacian(edge_index, normalization=self.normalization)
+        edge_index = edge_index.type(torch.LongTensor)
+        x = self.propagate(edge_index, x=x, edge_attr=edge_embedding)
+        x = self.W(x)
+        x = self.batch_norm(x)
+        return x
 
 ### GIN convolution along the graph structure
 class GINConv(MessagePassing):
@@ -70,7 +90,7 @@ class GNN_node(torch.nn.Module):
     Output:
         node representations
     """
-    def __init__(self, num_layer, emb_dim, drop_ratio = 0.5, JK = "last", residual = False, gnn_type = 'gin'):
+    def __init__(self, num_layer, emb_dim, drop_ratio = 0.5, JK = "last", residual = False, gnn_type = 'gin', normalization=None):
         '''
             emb_dim (int): node embedding dimensionality
             num_layer (int): number of GNN message passing layers
@@ -78,11 +98,14 @@ class GNN_node(torch.nn.Module):
         '''
 
         super(GNN_node, self).__init__()
+        self.gnn_type = gnn_type
         self.num_layer = num_layer
         self.drop_ratio = drop_ratio
         self.JK = JK
         ### add residual connection or not
         self.residual = residual
+        self.normalization = normalization
+
 
         if self.num_layer < 2:
             raise ValueError("Number of GNN layers must be greater than 1.")
@@ -98,10 +121,14 @@ class GNN_node(torch.nn.Module):
                 self.convs.append(GINConv(emb_dim))
             elif gnn_type == 'gcn':
                 self.convs.append(GCNConv(emb_dim))
+            elif gnn_type == 'sgc':
+                self.convs.append(SGCConv(emb_dim, self.normalization))
             else:
                 raise ValueError('Undefined GNN type called {}'.format(gnn_type))
-
             self.batch_norms.append(torch.nn.BatchNorm1d(emb_dim))
+
+
+
 
     def forward(self, batched_data):
         x, edge_index, edge_attr, batch = batched_data.x, batched_data.edge_index, batched_data.edge_attr, batched_data.batch
@@ -114,7 +141,7 @@ class GNN_node(torch.nn.Module):
             h = self.convs[layer](h_list[layer], edge_index, edge_attr)
             h = self.batch_norms[layer](h)
 
-            if layer == self.num_layer - 1:
+            if layer == self.num_layer - 1 or self.gnn_type =='sgc':
                 #remove relu for the last layer
                 h = F.dropout(h, self.drop_ratio, training = self.training)
             else:
@@ -142,7 +169,7 @@ class GNN_node_Virtualnode(torch.nn.Module):
     Output:
         node representations
     """
-    def __init__(self, num_layer, emb_dim, drop_ratio = 0.5, JK = "last", residual = False, gnn_type = 'gin'):
+    def __init__(self, num_layer, emb_dim, drop_ratio = 0.5, JK = "last", residual = False, gnn_type = 'gin', normalization=None):
         '''
             emb_dim (int): node embedding dimensionality
         '''
@@ -153,6 +180,7 @@ class GNN_node_Virtualnode(torch.nn.Module):
         self.JK = JK
         ### add residual connection or not
         self.residual = residual
+        self.normalization = normalization
 
         if self.num_layer < 2:
             raise ValueError("Number of GNN layers must be greater than 1.")
@@ -171,19 +199,23 @@ class GNN_node_Virtualnode(torch.nn.Module):
         ### List of MLPs to transform virtual node at every layer
         self.mlp_virtualnode_list = torch.nn.ModuleList()
 
+
         for layer in range(num_layer):
             if gnn_type == 'gin':
                 self.convs.append(GINConv(emb_dim))
             elif gnn_type == 'gcn':
                 self.convs.append(GCNConv(emb_dim))
+            elif gnn_type == 'sgc':
+                self.convs.append(SGCConv(emb_dim, self.normalization))
             else:
                 raise ValueError('Undefined GNN type called {}'.format(gnn_type))
-
             self.batch_norms.append(torch.nn.BatchNorm1d(emb_dim))
 
         for layer in range(num_layer - 1):
             self.mlp_virtualnode_list.append(torch.nn.Sequential(torch.nn.Linear(emb_dim, 2*emb_dim), torch.nn.BatchNorm1d(2*emb_dim), torch.nn.ReLU(), \
                                                     torch.nn.Linear(2*emb_dim, emb_dim), torch.nn.BatchNorm1d(emb_dim), torch.nn.ReLU()))
+
+
 
 
     def forward(self, batched_data):
@@ -202,7 +234,7 @@ class GNN_node_Virtualnode(torch.nn.Module):
             h = self.convs[layer](h_list[layer], edge_index, edge_attr)
 
             h = self.batch_norms[layer](h)
-            if layer == self.num_layer - 1:
+            if layer == self.num_layer - 1: #or gnn_type == 'sgc':
                 #remove relu for the last layer
                 h = F.dropout(h, self.drop_ratio, training = self.training)
             else:

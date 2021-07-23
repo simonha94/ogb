@@ -3,12 +3,10 @@ from torch_geometric.data import DataLoader
 import torch.optim as optim
 import torch.nn.functional as F
 from gnn import GNN
-
 from tqdm import tqdm
 import argparse
 import time
 import numpy as np
-
 ### importing OGB
 from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
 
@@ -59,7 +57,6 @@ def eval(model, device, loader, evaluator):
 
     return evaluator.eval(input_dict)
 
-
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='GNN baselines on ogbgmol* data with Pytorch Geometrics')
@@ -69,8 +66,11 @@ def main():
                         help='GNN gin, gin-virtual, or gcn, or gcn-virtual (default: gin-virtual)')
     parser.add_argument('--drop_ratio', type=float, default=0.5,
                         help='dropout ratio (default: 0.5)')
+    """hyperparameter k is here ==num_layer"""
     parser.add_argument('--num_layer', type=int, default=5,
-                        help='number of GNN message passing layers (default: 5)')
+                        help='number of GNN message passing layers (default: 5) or in the case of SGC, equals hyperparameter k!!!! sh')
+    parser.add_argument('--adj_norm', type=str, default=None,
+                        help='adjacency normalization method to apply')
     parser.add_argument('--emb_dim', type=int, default=300,
                         help='dimensionality of hidden units in GNNs (default: 300)')
     parser.add_argument('--batch_size', type=int, default=32,
@@ -92,6 +92,11 @@ def main():
 
     ### automatic dataloading and splitting
     dataset = PygGraphPropPredDataset(name = args.dataset)
+
+    """here preprocess for sgc if needed!, sh graph project 2021"""
+    #if args.gnn == 'sgc':
+        #dataset = adj_normalize(dataset, args.adj_norm)
+
 
     if args.feature == 'full':
         pass 
@@ -118,6 +123,9 @@ def main():
         model = GNN(gnn_type = 'gcn', num_tasks = dataset.num_tasks, num_layer = args.num_layer, emb_dim = args.emb_dim, drop_ratio = args.drop_ratio, virtual_node = False).to(device)
     elif args.gnn == 'gcn-virtual':
         model = GNN(gnn_type = 'gcn', num_tasks = dataset.num_tasks, num_layer = args.num_layer, emb_dim = args.emb_dim, drop_ratio = args.drop_ratio, virtual_node = True).to(device)
+    elif args.gnn == 'sgc':
+        """sh, graph project 2021"""
+        model = GNN(gnn_type = 'sgc', num_tasks = dataset.num_tasks, num_layer = args.num_layer, emb_dim = args.emb_dim, drop_ratio = args.drop_ratio, virtual_node = False, normalization=args.adj_norm).to(device)
     else:
         raise ValueError('Invalid GNN type')
 
