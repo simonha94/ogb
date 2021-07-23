@@ -21,7 +21,7 @@ class SGCConv(MessagePassing):
         edge_embedding = self.bond_encoder(edge_attr)
         if self.normalization is not None:
             edge_index, edge_weight = get_laplacian(edge_index, normalization=self.normalization)
-        edge_index = edge_index.type(torch.LongTensor)
+        edge_index = edge_index.type(torch.LongTensor).to(edge_index.device)
         x = self.propagate(edge_index, x=x, edge_attr=edge_embedding)
         x = self.W(x)
         x = self.batch_norm(x)
