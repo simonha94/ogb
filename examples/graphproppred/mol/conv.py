@@ -18,14 +18,23 @@ class SGCConv(MessagePassing):
         self.bond_encoder = BondEncoder(emb_dim = emb_dim)
 
     def forward(self, x, edge_index, edge_attr):
-        edge_embedding = self.bond_encoder(edge_attr)
+        if edge_attr is not None:
+            #
+            try:
+                edge_embedding = self.bond_encoder(edge_attr)
+            except IndexError:
+                edge_embedding = edge_attr
         if self.normalization is not None:
             edge_index, edge_weight = get_laplacian(edge_index, normalization=self.normalization)
         edge_index = edge_index.type(torch.LongTensor).to(edge_index.device)
-        x = self.propagate(edge_index, x=x, edge_attr=edge_embedding)
+        if edge_attr is not None:
+            x = self.propagate(edge_index, x=x, edge_attr=edge_embedding)
+        else:
+            x = self.propagate(edge_index, x=x)
         x = self.W(x)
         x = self.batch_norm(x)
         return x
+
 
 ### GIN convolution along the graph structure
 class GINConv(MessagePassing):
@@ -42,8 +51,15 @@ class GINConv(MessagePassing):
         self.bond_encoder = BondEncoder(emb_dim = emb_dim)
 
     def forward(self, x, edge_index, edge_attr):
-        edge_embedding = self.bond_encoder(edge_attr)
-        out = self.mlp((1 + self.eps) *x + self.propagate(edge_index, x=x, edge_attr=edge_embedding))
+        if edge_attr is not None:
+            if edge_attr is not None:
+                try:
+                    edge_embedding = self.bond_encoder(edge_attr)
+                except IndexError:
+                    edge_embedding = edge_attr
+            out = self.mlp((1 + self.eps) *x + self.propagate(edge_index, x=x, edge_attr=edge_embedding))
+        else:
+            out = self.mlp((1 + self.eps) * x + self.propagate(edge_index, x=x))
 
         return out
 
@@ -64,7 +80,10 @@ class GCNConv(MessagePassing):
 
     def forward(self, x, edge_index, edge_attr):
         x = self.linear(x)
-        edge_embedding = self.bond_encoder(edge_attr)
+        try:
+            edge_embedding = self.bond_encoder(edge_attr)
+        except IndexError:
+            edge_embedding = edge_attr
 
         row, col = edge_index
 
@@ -132,10 +151,11 @@ class GNN_node(torch.nn.Module):
 
     def forward(self, batched_data):
         x, edge_index, edge_attr, batch = batched_data.x, batched_data.edge_index, batched_data.edge_attr, batched_data.batch
-
         ### computing input node embedding
-
-        h_list = [self.atom_encoder(x)]
+        if isinstance(x, torch.FloatTensor):
+            h_list = [x]
+        else:
+            h_list = [self.atom_encoder(x)]
         for layer in range(self.num_layer):
 
             h = self.convs[layer](h_list[layer], edge_index, edge_attr)
@@ -224,8 +244,10 @@ class GNN_node_Virtualnode(torch.nn.Module):
 
         ### virtual node embeddings for graphs
         virtualnode_embedding = self.virtualnode_embedding(torch.zeros(batch[-1].item() + 1).to(edge_index.dtype).to(edge_index.device))
-
-        h_list = [self.atom_encoder(x)]
+        if isinstance(x, torch.FloatTensor):
+            h_list = [x]
+        else:
+            h_list = [self.atom_encoder(x)]
         for layer in range(self.num_layer):
             ### add message from virtual nodes to graph nodes
             h_list[layer] = h_list[layer] + virtualnode_embedding[batch]
